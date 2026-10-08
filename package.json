@@ -1,0 +1,40 @@
+{
+  "name": "omp-quick-provider",
+  "version": "1.0.0",
+  "description": "Oh My Pi extension: add and manage arbitrary OpenAI/Anthropic/Gemini-compatible API providers (base URL + key) through dialogs — no models.yml editing.",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "omp": {
+    "name": "Quick Provider",
+    "version": "1.0.0",
+    "description": "Dialog-driven API provider manager (base URL + key) for omp.",
+    "extensions": [
+      "extensions/quick-provider.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/quick-provider.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/R0smontis/omp-quick-provider.git"
+  },
+  "keywords": [
+    "oh-my-pi",
+    "omp",
+    "omp-extension",
+    "llm",
+    "provider",
+    "api-key",
+    "openai-compatible"
+  ],
+  "engines": {
+    "node": ">=22.6"
+  }
+}

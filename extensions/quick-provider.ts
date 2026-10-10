@@ -12,7 +12,7 @@ import type {
  * quick-provider — 弹窗式快捷添加 / 管理 API 供应商（base URL + key），无需手改 models.yml。
  *
  * 每个条目在扩展加载时注册：
- * - fetchDynamicModels：按协议拉取模型目录（宿主 SQLite 缓存 24h，/provider refresh 强制刷新）。
+ * - fetchDynamicModels：按协议拉取模型目录（宿主 SQLite 缓存 24h，/qkprovider refresh 强制刷新）。
  *   失败必须抛错 —— 宿主把「成功但空」视为权威空目录并剪掉该 provider 的全部已发现模型
  *   （表现为 /model 里突然消失）；抛错则保留上次目录（stale）。仅当端点明确返回空列表时返回 []。
  * - oauth：/login <id> 走宿主登录流，密钥存入 omp 凭据库。
@@ -20,7 +20,7 @@ import type {
  *   向导里填了 key 就用它，要换成 /login 得先删掉或覆盖该条目。
  *
  * 存储：<agentDir>/quick-providers.json（原子写；文件损坏先备份再继续，绝不静默覆盖）
- * 命令：/provider [add|list|remove|delete|refresh]，delete 与 remove 等价。
+ * 命令：/qkprovider [add|list|remove|delete|refresh]，delete 与 remove 等价。
  */
 
 type ApiChoice = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
@@ -535,7 +535,7 @@ export default function quickProvider(pi: ExtensionAPI): void {
 
 	async function addFlow(ctx: ExtensionCommandContext, prefill: string[]): Promise<void> {
 		if (ctx.mode !== "tui" || !ctx.hasUI) {
-			ctx.ui.notify("添加供应商需要 TUI：/provider add", "warning");
+			ctx.ui.notify("添加供应商需要 TUI：/qkprovider add", "warning");
 			return;
 		}
 		const [prefillUrl, prefillId] = prefill;
@@ -629,11 +629,11 @@ export default function quickProvider(pi: ExtensionAPI): void {
 		const count = counts.get(id) ?? 0;
 		const failure = observedFailure(id, startedAt);
 		const lines = [`已添加 ${id} → ${baseUrl}`, `协议 ${api} · 模型 ${count}`];
-		if (key) lines.push("密钥已存入本插件配置（优先于 /login；更换：重新 /provider add 或先删后 /login）");
+		if (key) lines.push("密钥已存入本插件配置（优先于 /login；更换：重新 /qkprovider add 或先删后 /login）");
 		else lines.push(`密钥：运行 /login ${id}`);
 		if (failure) lines.push(`目录拉取失败：${failure}`);
 		if (count === 0) {
-			lines.push("模型为 0：可重新 /provider add 手动填模型 ID，或 /provider refresh " + id + " 重试");
+			lines.push("模型为 0：可重新 /qkprovider add 手动填模型 ID，或 /qkprovider refresh " + id + " 重试");
 			ctx.ui.notify(lines.join("\n"), "warning");
 		} else {
 			ctx.ui.notify(lines.join("\n"), "info");
@@ -646,7 +646,7 @@ export default function quickProvider(pi: ExtensionAPI): void {
 		if (!store) return;
 		if (store.note) ctx.ui.notify(store.note, "warning");
 		if (store.providers.length === 0) {
-			ctx.ui.notify("没有已添加的供应商 — /provider add", "info");
+			ctx.ui.notify("没有已添加的供应商 — /qkprovider add", "info");
 			return;
 		}
 		const lines = ["── API 供应商 ──"];
@@ -661,7 +661,7 @@ export default function quickProvider(pi: ExtensionAPI): void {
 			const source = entry.key ? "向导录入" : "凭据库/环境";
 			lines.push(`${entry.id} · ${entry.baseUrl} · ${entry.api} · 密钥 ${mask(resolved ?? entry.key)}（${source}） · 模型 ${count}`);
 		}
-		lines.push("", "添加 /provider add · 删除 /provider delete <id>（remove 同）· 刷新 /provider refresh [id]");
+		lines.push("", "添加 /qkprovider add · 删除 /qkprovider delete <id>（remove 同）· 刷新 /qkprovider refresh [id]");
 		ctx.ui.notify(lines.join("\n"), "info");
 	}
 
@@ -679,7 +679,7 @@ export default function quickProvider(pi: ExtensionAPI): void {
 		}
 		if (!id) {
 			if (ctx.mode !== "tui" || !ctx.hasUI) {
-				ctx.ui.notify(`用法：/provider delete <id>（现有：${store.providers.map((e) => e.id).join(", ")}）`, "warning");
+				ctx.ui.notify(`用法：/qkprovider delete <id>（现有：${store.providers.map((e) => e.id).join(", ")}）`, "warning");
 				return;
 			}
 			id = await ctx.ui.select(
@@ -749,7 +749,7 @@ export default function quickProvider(pi: ExtensionAPI): void {
 		else if (choice === "刷新模型目录") await refreshFlow(ctx);
 	}
 
-	pi.registerCommand("provider", {
+	pi.registerCommand("qkprovider", {
 		description: "快捷添加 / 管理 API 供应商（base URL + key）",
 		getArgumentCompletions: (prefix) => {
 			const parts = (prefix ?? "").trim().split(/\s+/);
@@ -775,7 +775,7 @@ export default function quickProvider(pi: ExtensionAPI): void {
 			else if (sub === "list") await listFlow(ctx);
 			else if (sub === "remove" || sub === "delete") await removeFlow(ctx, rest[0]);
 			else if (sub === "refresh") await refreshFlow(ctx, rest[0]);
-			else ctx.ui.notify(`未知子命令 "${sub}"：用 /provider [add|list|remove|delete|refresh]`, "error");
+			else ctx.ui.notify(`未知子命令 "${sub}"：用 /qkprovider [add|list|remove|delete|refresh]`, "error");
 		},
 	});
 }

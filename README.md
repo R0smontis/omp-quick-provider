@@ -3,10 +3,10 @@
 Oh My Pi（`omp`）扩展：**用对话框快捷添加 / 管理任意 OpenAI / Anthropic / Gemini 兼容的 API 供应商**（base URL + API Key），不用手改 `models.yml`。
 
 ```
-/provider add      # 弹窗式添加：URL → ID → 协议 → 密钥（不回显）→ 自动探测模型
-/provider list     # 列出供应商、密钥来源与当前模型数
-/provider refresh  # 强制刷新模型目录（24h 缓存的在线刷新）
-/provider delete   # 删除供应商（remove 同义）
+/qkprovider add      # 弹窗式添加：URL → ID → 协议 → 密钥（不回显）→ 自动探测模型
+/qkprovider list     # 列出供应商、密钥来源与当前模型数
+/qkprovider refresh  # 强制刷新模型目录（24h 缓存的在线刷新）
+/qkprovider delete   # 删除供应商（remove 同义）
 ```
 
 ## 功能
@@ -45,10 +45,10 @@ omp plugin link ./omp-quick-provider
 
 ## 使用
 
-1. `/provider add`
+1. `/qkprovider add`
 2. 依次填写：**Base URL**（如 `https://host/v1`）→ **Provider ID**（模型名前缀，`my-gw` 对应 `my-gw/model`）→ **API 协议** → **API Key**（不回显，可留空）。
 3. 扩展会先探测一次 `<baseUrl>/models`：成功则直接写入；失败会提示原因，并允许手动填写模型 ID（逗号分隔）。
-4. 通知里会显示模型数量；`/provider refresh <id>` 可随时重拉。
+4. 通知里会显示模型数量；`/qkprovider refresh <id>` 可随时重拉。
 
 **密钥的存放与优先级**（宿主凭据链规则）：
 
@@ -57,15 +57,15 @@ omp plugin link ./omp-quick-provider
 | 向导里填的 Key | `~/.omp/agent/quick-providers.json`（0600，明文，与 `models.yml` 的 `apiKey` 同层级） | 高于 `/login` 存储 |
 | `/login <id>` | `omp` 凭据库（SQLite） | 低于向导录入 |
 
-因此：**要更换向导录入的密钥，请重新 `/provider add` 覆盖该 ID，或先 `/provider delete <id>` 再 `/login <id>`。** 只想用 `/login` 管理密钥时，添加时把 Key 留空即可。
+因此：**要更换向导录入的密钥，请重新 `/qkprovider add` 覆盖该 ID，或先 `/qkprovider delete <id>` 再 `/login <id>`。** 只想用 `/login` 管理密钥时，添加时把 Key 留空即可。
 
-`/provider list` 会标注每个条目的密钥来源（`向导录入` / `凭据库/环境`）。
+`/qkprovider list` 会标注每个条目的密钥来源（`向导录入` / `凭据库/环境`）。
 
 ## 存储与恢复
 
 - 路径：`~/.omp/agent/quick-providers.json`（跟随 `PI_CODING_AGENT_DIR`；Linux/macOS 上若存在 `$XDG_DATA_HOME/omp` 则用其）。
 - 损坏恢复：JSON 无法解析时，原文件被改名为 `quick-providers.json.corrupt-<时间戳>`，扩展继续以空列表运行——**原数据不会被覆盖**。
-- 删除条目：`/provider delete <id>`（TUI 中会二次确认）。
+- 删除条目：`/qkprovider delete <id>`（TUI 中会二次确认）。
 
 ## 开发与测试
 
@@ -77,13 +77,13 @@ node --test test/    # 需要 Node ≥ 22.6（原生 TS 类型擦除），实测
 
 ## 已知限制
 
-- `omp` 18.1.22 中斜杠命令需要已选中模型才能提交；首次配置时若一个可用模型都没有，先在 `models.yml` 或环境变量里给一个密钥，再运行 `/provider`。
+- `omp` 18.1.22 中斜杠命令需要已选中模型才能提交；首次配置时若一个可用模型都没有，先在 `models.yml` 或环境变量里给一个密钥，再运行 `/qkprovider`。
 - 隐藏的 `omp` 内核细节（`fetchDynamicModels` 的"空数组=权威空目录、抛错=保留旧目录"语义）是 18.1.22 实测行为，未来大版本若变更需回归测试。
 - 密钥以明文存于上述 JSON（`0600`）；请确保 `~/.omp/agent` 目录本身未被共享。
 
 ## English
 
-`omp-quick-provider` is an [Oh My Pi](https://github.com/can1357/oh-my-pi) extension that adds and manages arbitrary OpenAI/Anthropic/Gemini-compatible API providers (base URL + API key) through dialogs: `/provider add|list|refresh|delete`. It features protocol-aware model discovery with pagination, a never-prune-on-failure policy, a masked secret input, and a crash-safe atomic store (`~/.omp/agent/quick-providers.json`).
+`omp-quick-provider` is an [Oh My Pi](https://github.com/can1357/oh-my-pi) extension that adds and manages arbitrary OpenAI/Anthropic/Gemini-compatible API providers (base URL + API key) through dialogs: `/qkprovider add|list|refresh|delete`. It features protocol-aware model discovery with pagination, a never-prune-on-failure policy, a masked secret input, and a crash-safe atomic store (`~/.omp/agent/quick-providers.json`).
 
 Install: copy `extensions/quick-provider.ts` into `~/.omp/agent/extensions/`, or `omp plugin link` the repository. Licensed under MIT.
 

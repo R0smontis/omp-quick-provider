@@ -36,6 +36,25 @@ before(async () => {
 			return res.end("<html>nope</html>");
 		}
 		if (p === "/nested/v1/models") return json({ result: { items: [{ id: "nested-1" }] } });
+		if (p === "/reasoning/v1/models") {
+			return json({
+				data: [
+					{ id: "reasoner", reasoning: true, supported_reasoning_levels: ["low", "medium", "high"], default_reasoning_level: "medium" },
+					{ id: "plain", reasoning: false, supported_reasoning_levels: ["low"] },
+					{ id: "unknown" },
+					{
+						id: "metadata-only",
+						metadata: {
+							reasoning: true,
+							supported_reasoning_levels: ["none", "minimal", "low", "max"],
+							default_reasoning_level: "max",
+						},
+					},
+					{ id: "levels-only", supported_reasoning_levels: ["minimal", "high"] },
+					{ id: "bad-default", reasoning: true, supported_reasoning_levels: ["low", "high"], default_reasoning_level: "max" },
+				],
+			});
+		}
 		if (p === "/anthropic/v1/models") {
 			if (req.headers["anthropic-version"] !== "2023-06-01") return json({ error: "missing version" }, 400);
 			if (!url.searchParams.get("after_id")) {
@@ -327,6 +346,45 @@ test("discovery: anthropic pagination + headers; google pagination + capability 
 	const gemReq = requests.filter((r) => r.path === "/v1beta/models");
 	assert.ok(gemReq.every((r) => r.headers["x-goog-api-key"] === "gm-key"));
 	assert.ok(gemReq.some((r) => r.query.pageToken === "page2"));
+});
+
+test("discovery: advertised reasoning levels become thinking metadata; unknown stays unset", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "qp-test-"));
+	process.env.PI_CODING_AGENT_DIR = dir;
+	writeFileSync(
+		storeFile(dir),
+		JSON.stringify({
+			version: 2,
+			providers: [
+				{ id: "reasoning", baseUrl: `${base}/reasoning/v1`, api: "openai-completions" },
+				{ id: "forced-off", baseUrl: `${base}/reasoning/v1`, api: "openai-completions", reasoning: false },
+				{ id: "forced-on", baseUrl: `${base}/reasoning/v1`, api: "openai-completions", reasoning: true },
+			],
+		}),
+	);
+	const providers = new Map();
+	quickProvider({ setLabel() {}, registerProvider: (pid, cfg) => providers.set(pid, cfg), unregisterProvider() {}, registerCommand() {} });
+
+	const models = await providers.get("reasoning").fetchDynamicModels(undefined);
+	const byId = Object.fromEntries(models.map((m) => [m.id, m]));
+	assert.equal(byId.reasoner.reasoning, true);
+	assert.deepEqual(byId.reasoner.thinking, { mode: "effort", efforts: ["low", "medium", "high"], defaultLevel: "medium" });
+	assert.equal(byId.plain.reasoning, false, "explicit upstream false wins over its level list");
+	assert.equal(byId.plain.thinking, undefined);
+	assert.equal("reasoning" in byId.unknown, false, "unknown must stay unset, not false, so the host can probe");
+	assert.equal("thinking" in byId.unknown, false);
+	assert.equal(byId["metadata-only"].reasoning, true);
+	assert.deepEqual(byId["metadata-only"].thinking, { mode: "effort", efforts: ["minimal", "low", "max"], defaultLevel: "max" });
+	assert.equal(byId["levels-only"].reasoning, true);
+	assert.deepEqual(byId["levels-only"].thinking, { mode: "effort", efforts: ["minimal", "high"] });
+	assert.deepEqual(byId["bad-default"].thinking, { mode: "effort", efforts: ["low", "high"] }, "default outside the advertised ladder is dropped");
+
+	const forcedOff = (await providers.get("forced-off").fetchDynamicModels(undefined)).find((m) => m.id === "reasoner");
+	assert.equal(forcedOff.reasoning, false);
+	assert.equal(forcedOff.thinking, undefined);
+	const forcedOn = (await providers.get("forced-on").fetchDynamicModels(undefined)).find((m) => m.id === "unknown");
+	assert.equal(forcedOn.reasoning, true);
+	assert.equal(forcedOn.thinking, undefined);
 });
 
 test("URL validation: protocol-aware normalization and rejection of query/hash/userinfo", async () => {

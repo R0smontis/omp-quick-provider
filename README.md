@@ -16,6 +16,7 @@ Oh My Pi（`omp`）扩展：**用对话框快捷添加 / 管理任意 OpenAI / A
   - `openai-completions` / `openai-responses`：`GET <baseUrl>/models`
   - `anthropic-messages`：`GET <baseUrl>/v1/models`（`x-api-key` + `anthropic-version`，`after_id` 翻页）
   - `google-generative-ai`：`GET <baseUrl>/models?key=…`（`pageToken` 翻页，并按 `supportedGenerationMethods` 过滤非生成模型）
+- **推理能力透传**：发现结果中的 `reasoning` / `supported_reasoning_levels` / `default_reasoning_level`（顶层或 `metadata` 内）会映射为逐模型的思考档位；上游未声明时保持未设置，交给 `omp` 推断或首次使用时探测，不再默认写死 `reasoning: false`。
 - **失败绝不清空**：网络错误 / 超时 / 非 2xx / 坏 JSON / 无列表一律视为失败，保留上次目录（stale）；只有端点明确返回空列表才会清空。模型不会在 `/model` 里"突然消失"。
 - **屏蔽输入**：密钥输入框不回显（`omp` 18.1.22 自带的 `/login` 与 `ui.input` 都不支持遮蔽）。
 - **写入安全**：存储原子写入（唯一临时文件 + rename）；文件损坏时先备份 `.corrupt-<ts>` 再继续，读失败直接拒绝操作；覆盖/删除前会重读合并，多实例并发不丢数据。
@@ -79,13 +80,15 @@ node --test test/    # 需要 Node ≥ 22.6（原生 TS 类型擦除），实测
 
 - `omp` 18.1.22 中斜杠命令需要已选中模型才能提交；首次配置时若一个可用模型都没有，先在 `models.yml` 或环境变量里给一个密钥，再运行 `/qkprovider`。
 - 隐藏的 `omp` 内核细节（`fetchDynamicModels` 的"空数组=权威空目录、抛错=保留旧目录"语义）是 18.1.22 实测行为，未来大版本若变更需回归测试。
+- 上游未声明推理能力时，首次使用某个思考档位会触发 `omp` 的能力探测（额外请求与延迟）；探测结果按模型缓存在 `models.db`。
+- 仅对 `openai-completions` / `openai-responses` 生成 `thinking` 档位；其他协议只透传 `reasoning`，由宿主决定请求形状。
 - 密钥以明文存于上述 JSON（`0600`）；请确保 `~/.omp/agent` 目录本身未被共享。
 
 ## English
 
 `omp-quick-provider` is an [Oh My Pi](https://github.com/can1357/oh-my-pi) extension that adds and manages arbitrary OpenAI/Anthropic/Gemini-compatible API providers (base URL + API key) through dialogs: `/qkprovider add|list|refresh|delete`. It features protocol-aware model discovery with pagination, a never-prune-on-failure policy, a masked secret input, and a crash-safe atomic store (`~/.omp/agent/quick-providers.json`).
 
-Install: copy `extensions/quick-provider.ts` into `~/.omp/agent/extensions/`, or `omp plugin link` the repository. Licensed under MIT.
+Install: copy `extensions/quick-provider.ts` into `~/.omp/agent/extensions/`, or `omp plugin link` the repository. Discovery passes through per-model reasoning metadata (`reasoning`, `supported_reasoning_levels`, `default_reasoning_level`) so thinking levels are selectable; unknown capability stays unset instead of being forced to `false`. Licensed under MIT.
 
 ## License
 

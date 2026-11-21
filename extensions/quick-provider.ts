@@ -15,6 +15,8 @@ import type {
  * - fetchDynamicModels：按协议拉取模型目录（宿主 SQLite 缓存 24h，/qkprovider refresh 强制刷新）。
  *   失败必须抛错 —— 宿主把「成功但空」视为权威空目录并剪掉该 provider 的全部已发现模型
  *   （表现为 /model 里突然消失）；抛错则保留上次目录（stale）。仅当端点明确返回空列表时返回 []。
+ * - 推理能力：读取发现行里的 reasoning / supported_reasoning_levels / default_reasoning_level，
+ *   生成逐模型的思考档位；上游未声明时省略 reasoning，交给宿主推断/探测，绝不写死 false。
  * - oauth：/login <id> 走宿主登录流，密钥存入 omp 凭据库。
  * - key：可选，存本扩展 JSON（0600）。注意宿主凭据链里「配置键」优先于 /login 存储：
  *   向导里填了 key 就用它，要换成 /login 得先删掉或覆盖该条目。
@@ -244,6 +246,52 @@ function suggestId(baseUrl: string): string {
 
 // ── 模型发现 ─────────────────────────────────────────────────────────────────
 
+const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+/** 部分网关把推理元数据放在 `metadata` 对象里；顶层字段优先。 */
+function metadataField(raw: Record<string, unknown>, key: string): unknown {
+	if (raw[key] !== undefined) return raw[key];
+	const metadata = raw.metadata;
+	if (metadata && typeof metadata === "object" && key in metadata) {
+		return (metadata as Record<string, unknown>)[key];
+	}
+	return undefined;
+}
+
+/** 只保留宿主认识的档位；`none` 等扩展值忽略。 */
+function advertisedEfforts(raw: Record<string, unknown>): ReasoningEffort[] {
+	const value = metadataField(raw, "supported_reasoning_levels");
+	if (!Array.isArray(value)) return [];
+	const seen = new Set<string>();
+	const efforts: ReasoningEffort[] = [];
+	for (const item of value) {
+		if (typeof item !== "string" || seen.has(item)) continue;
+		if (!(REASONING_EFFORTS as readonly string[]).includes(item)) continue;
+		seen.add(item);
+		efforts.push(item as ReasoningEffort);
+	}
+	return efforts;
+}
+
+/**
+ * 只有 OpenAI 风格端点把档位映射为 `reasoning_effort`；其他协议不猜测 wire 形状，
+ * 仅透传 reasoning，让宿主按目录/探测决定。
+ */
+function thinkingMetadata(
+	api: ApiChoice,
+	efforts: ReasoningEffort[],
+	raw: Record<string, unknown>,
+): ProviderModelConfig["thinking"] | undefined {
+	if (efforts.length === 0 || (api !== "openai-completions" && api !== "openai-responses")) return undefined;
+	const advertisedDefault = str(metadataField(raw, "default_reasoning_level"));
+	const defaultLevel =
+		advertisedDefault && (efforts as readonly string[]).includes(advertisedDefault)
+			? (advertisedDefault as ReasoningEffort)
+			: undefined;
+	return { mode: "effort", efforts, ...(defaultLevel ? { defaultLevel } : {}) };
+}
+
 function makeModel(entry: StoredProvider, id: string, raw: Record<string, unknown>): ProviderModelConfig {
 	const rawName = str(raw.name);
 	const name =
@@ -251,11 +299,25 @@ function makeModel(entry: StoredProvider, id: string, raw: Record<string, unknow
 		str(raw.display_name) ??
 		(rawName && !rawName.startsWith("models/") ? rawName : undefined) ??
 		id;
+	const efforts = advertisedEfforts(raw);
+	const advertisedReasoning = metadataField(raw, "reasoning");
+	// 显式配置 > 上游声明 > 档位推断 > 未知（省略，交给宿主推断/探测）。
+	// 关键：不能用 false 表示“未知”，否则宿主会跳过能力探测并隐藏思考档位。
+	const reasoning =
+		typeof entry.reasoning === "boolean"
+			? entry.reasoning
+			: typeof advertisedReasoning === "boolean"
+				? advertisedReasoning
+				: efforts.length > 0
+					? true
+					: undefined;
+	const thinking = reasoning === false ? undefined : thinkingMetadata(entry.api, efforts, raw);
 	return {
 		id,
 		name,
 		api: entry.api,
-		reasoning: entry.reasoning ?? false,
+		...(reasoning === undefined ? {} : { reasoning }),
+		...(thinking ? { thinking } : {}),
 		input: entry.input ?? ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow:

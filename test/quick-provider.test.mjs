@@ -1,9 +1,12 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const EXT = new URL("../extensions/quick-provider.ts", import.meta.url).href;
 const quickProvider = (await import(EXT)).default;
@@ -116,6 +119,7 @@ function makeHarness({ answers = [], selects = [], confirms = [], secrets = [] }
 	};
 	const pi = {
 		setLabel() {},
+		on() {},
 		registerProvider: (id, config) => providers.set(id, config),
 		unregisterProvider: (id) => {
 			unregistered.push(id);
@@ -268,6 +272,7 @@ test("discovery: non-2xx, bad JSON, all-invalid rows all throw (stale preserved)
 		const providers = new Map();
 		quickProvider({
 			setLabel() {},
+			on() {},
 			registerProvider: (pid, cfg) => providers.set(pid, cfg),
 			unregisterProvider() {},
 			registerCommand() {},
@@ -288,6 +293,7 @@ test("discovery: non-2xx, bad JSON, all-invalid rows all throw (stale preserved)
 		const providers = new Map();
 		quickProvider({
 			setLabel() {},
+			on() {},
 			registerProvider: (pid, cfg) => providers.set(pid, cfg),
 			unregisterProvider() {},
 			registerCommand() {},
@@ -308,6 +314,7 @@ test("discovery: non-2xx, bad JSON, all-invalid rows all throw (stale preserved)
 		const providers = new Map();
 		quickProvider({
 			setLabel() {},
+			on() {},
 			registerProvider: (pid, cfg) => providers.set(pid, cfg),
 			unregisterProvider() {},
 			registerCommand() {},
@@ -333,7 +340,7 @@ test("discovery: anthropic pagination + headers; google pagination + capability 
 		}),
 	);
 	const providers = new Map();
-	quickProvider({ setLabel() {}, registerProvider: (pid, cfg) => providers.set(pid, cfg), unregisterProvider() {}, registerCommand() {} });
+	quickProvider({ setLabel() {}, on() {}, registerProvider: (pid, cfg) => providers.set(pid, cfg), unregisterProvider() {}, registerCommand() {} });
 
 	const anth = await providers.get("anth").fetchDynamicModels("ak");
 	assert.deepEqual(anth.map((m) => m.id), ["claude-1", "claude-2"]);
@@ -363,7 +370,7 @@ test("discovery: advertised reasoning levels become thinking metadata; unknown s
 		}),
 	);
 	const providers = new Map();
-	quickProvider({ setLabel() {}, registerProvider: (pid, cfg) => providers.set(pid, cfg), unregisterProvider() {}, registerCommand() {} });
+	quickProvider({ setLabel() {}, on() {}, registerProvider: (pid, cfg) => providers.set(pid, cfg), unregisterProvider() {}, registerCommand() {} });
 
 	const models = await providers.get("reasoning").fetchDynamicModels(undefined);
 	const byId = Object.fromEntries(models.map((m) => [m.id, m]));
@@ -428,4 +435,124 @@ test("refresh reports real discovery outcome, not just a fulfilled promise", asy
 	writeFileSync(storeFile(h.dir), JSON.stringify({ version: 2, providers: [{ id: "smoke", baseUrl: `${base}/flaky`, api: "openai-completions" }] }));
 	await h.command.handler("refresh smoke", mid);
 	assert.ok(h.notifications.some((n) => n.text.includes("拉取失败")), JSON.stringify(h.notifications));
+});
+
+test("copied extension upgrades once on interactive startup and rejects a corrupt download", async t => {
+	const original = readFileSync(new URL(EXT), "utf8");
+	const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+	const [major, minor, patch] = version.split(".").map(Number);
+	const next = `${major}.${minor}.${patch + 1}`;
+	const updated = original.replace(`const PLUGIN_VERSION = "${version}";`, `const PLUGIN_VERSION = "${next}";`);
+	assert.notEqual(updated, original);
+	for (const scenario of ["valid", "corrupt"]) {
+		await t.test(scenario, async t => {
+			const root = mkdtempSync(join(tmpdir(), "qp-update-"));
+			const oldDir = process.env.PI_CODING_AGENT_DIR;
+			const oldSetting = process.env.OMP_QUICK_PROVIDER_AUTO_UPDATE;
+			t.after(() => {
+				if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+				else process.env.PI_CODING_AGENT_DIR = oldDir;
+				if (oldSetting === undefined) delete process.env.OMP_QUICK_PROVIDER_AUTO_UPDATE;
+				else process.env.OMP_QUICK_PROVIDER_AUTO_UPDATE = oldSetting;
+				rmSync(root, { recursive: true, force: true });
+			});
+			process.env.PI_CODING_AGENT_DIR = root;
+			delete process.env.OMP_QUICK_PROVIDER_AUTO_UPDATE;
+			const extensions = join(root, "extensions");
+			mkdirSync(extensions);
+			const source = join(extensions, "quick-provider.ts");
+			writeFileSync(source, original);
+			const config = '{"version":2,"providers":[]}\n';
+			writeFileSync(storeFile(root), config);
+			const tag = `v${next}`;
+			const digest = `sha256:${createHash("sha256").update(updated).digest("hex")}`;
+			const urls = [];
+			t.mock.method(globalThis, "fetch", async url => {
+				urls.push(url);
+				if (url === "https://api.github.com/repos/R0smontis/omp-quick-provider/releases/latest") {
+					return Response.json({ tag_name: tag, assets: [{ name: "quick-provider.ts", digest }] });
+				}
+				return new Response(scenario === "valid" ? updated : `${updated}\n// corrupt`);
+			});
+			const loaded = (await import(pathToFileURL(source).href)).default;
+			let start;
+			const notices = [];
+			loaded({ setLabel() {}, registerCommand() {}, on: (event, handler) => {
+				if (event === "session_start") start = handler;
+			} });
+			const ctx = { hasUI: true, mode: "tui", ui: { notify: message => notices.push(message) } };
+			start({}, { ...ctx, mode: "print" });
+			process.env.OMP_QUICK_PROVIDER_AUTO_UPDATE = "0";
+			start({}, ctx);
+			assert.deepEqual(urls, []);
+			delete process.env.OMP_QUICK_PROVIDER_AUTO_UPDATE;
+			start({}, ctx);
+			start({}, ctx);
+			await new Promise(setImmediate);
+			assert.deepEqual(urls, [
+				"https://api.github.com/repos/R0smontis/omp-quick-provider/releases/latest",
+				`https://github.com/R0smontis/omp-quick-provider/releases/download/${tag}/quick-provider.ts`,
+			]);
+			assert.equal(readFileSync(source, "utf8"), scenario === "valid" ? updated : original);
+			assert.equal(readFileSync(storeFile(root), "utf8"), config);
+			assert.deepEqual(readdirSync(extensions), ["quick-provider.ts"]);
+			assert.deepEqual(notices, scenario === "valid" ? [`Quick Provider 已更新到 ${next}，重启 omp 后生效`] : []);
+		});
+	}
+});
+
+test("linked install fast-forwards to the release without overwriting local changes", { timeout: 10_000 }, async t => {
+	const root = mkdtempSync(join(tmpdir(), "qp-linked-"));
+	const previous = { ...process.env };
+	t.after(() => {
+		for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
+		Object.assign(process.env, previous);
+		rmSync(root, { recursive: true, force: true });
+	});
+	const config = join(root, "agent");
+	process.env.PI_CODING_AGENT_DIR = config;
+	delete process.env.OMP_QUICK_PROVIDER_AUTO_UPDATE;
+	process.env.GIT_CONFIG_NOSYSTEM = "1";
+	process.env.GIT_CONFIG_GLOBAL = join(root, "gitconfig");
+	const remote = join(root, "remote");
+	const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	git(root, "init", "-b", "main", remote);
+	git(remote, "config", "user.email", "test@example.invalid");
+	git(remote, "config", "user.name", "Update test");
+	const original = readFileSync(new URL(EXT), "utf8");
+	const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+	const [major, minor, patch] = version.split(".").map(Number);
+	const next = `${major}.${minor}.${patch + 1}`;
+	const tag = `v${next}`;
+	const entry = "extensions/quick-provider.ts";
+	mkdirSync(join(remote, "extensions"));
+	writeFileSync(join(remote, entry), original);
+	git(remote, "add", entry);
+	git(remote, "commit", "-m", "old");
+	const oldHead = git(remote, "rev-parse", "HEAD");
+	for (const scenario of ["clean", "dirty"]) git(root, "clone", remote, scenario);
+	const updated = original.replace(`const PLUGIN_VERSION = "${version}";`, `const PLUGIN_VERSION = "${next}";`);
+	writeFileSync(join(remote, entry), updated);
+	git(remote, "commit", "-am", "release");
+	git(remote, "tag", tag);
+	git(root, "config", "--global", `url.${pathToFileURL(remote).href}.insteadOf`, "https://github.com/R0smontis/omp-quick-provider");
+	t.mock.method(globalThis, "fetch", async () => Response.json({ tag_name: tag }));
+	for (const scenario of ["dirty", "clean"]) {
+		const cwd = join(root, scenario);
+		const source = join(cwd, entry);
+		if (scenario === "dirty") writeFileSync(source, `${original}\n// local edit`);
+		const loaded = (await import(pathToFileURL(source).href)).default;
+		let start;
+		loaded({ setLabel() {}, registerCommand() {}, on: (event, handler) => {
+			if (event === "session_start") start = handler;
+		} });
+		const notices = [];
+		let notify;
+		const upgraded = new Promise(resolve => { notify = resolve; });
+		start({}, { hasUI: true, mode: "tui", ui: { notify: message => { notices.push(message); notify(); } } });
+		if (scenario === "clean") await upgraded;
+		assert.equal(git(cwd, "rev-parse", "HEAD"), scenario === "clean" ? git(remote, "rev-parse", tag) : oldHead);
+		assert.equal(readFileSync(source, "utf8"), scenario === "clean" ? updated : `${original}\n// local edit`);
+		assert.equal(notices.length, Number(scenario === "clean"));
+	}
 });

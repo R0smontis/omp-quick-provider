@@ -1,6 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -42,6 +46,82 @@ const DISCOVERY_TIMEOUT_MS = 12_000;
  */
 const MAX_DISCOVERED_MODELS = 1000;
 const STORE_VERSION = 2;
+
+const PLUGIN_VERSION = "1.0.2";
+const RELEASE_REPO = "https://github.com/R0smontis/omp-quick-provider";
+const RELEASE_API = "https://api.github.com/repos/R0smontis/omp-quick-provider/releases/latest";
+const UPDATE_ASSET = "quick-provider.ts";
+const runGit = promisify(execFile);
+let updateStarted = false;
+
+function isNewer(version: string): boolean {
+	if (!/^(?:0|[1-9]\d{0,8})(?:\.(?:0|[1-9]\d{0,8})){2}$/.test(version)) return false;
+	const current = PLUGIN_VERSION.split(".").map(Number);
+	for (const [i, part] of version.split(".").entries()) {
+		const delta = Number(part) - current[i]!;
+		if (delta) return delta > 0;
+	}
+	return false;
+}
+
+async function autoUpdate(): Promise<string | undefined> {
+	const source = realpathSync(fileURLToPath(import.meta.url));
+	const root = dirname(dirname(source));
+	const linked = existsSync(join(root, ".git"));
+	// Do not partially rewrite package-manager installations.
+	if (!linked && existsSync(join(root, "package.json"))) return;
+	const git = async (...args: string[]) => {
+		const { stdout } = await runGit("git", args, {
+			cwd: root,
+			timeout: 20_000,
+			env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never" },
+		});
+		return stdout.trim();
+	};
+	const original = linked ? undefined : readFileSync(source);
+	if (original && !original.includes(`const PLUGIN_VERSION = "${PLUGIN_VERSION}";`)) return;
+
+	const response = await fetch(RELEASE_API, { signal: AbortSignal.timeout(5_000), redirect: "error" });
+	if (!response.ok) return;
+	const release = (await response.json()) as {
+		tag_name?: string;
+		draft?: boolean;
+		prerelease?: boolean;
+		assets?: { name: string; digest?: string }[];
+	};
+	const tag = release.tag_name;
+	if (release.draft || release.prerelease || typeof tag !== "string" || !tag.startsWith("v")) return;
+	const version = tag.slice(1);
+	if (!isNewer(version)) return;
+
+	if (linked) {
+		// Do not change branches, overwrite local edits, or merge diverged histories.
+		if ((await git("branch", "--show-current")) !== "main" || (await git("status", "--porcelain"))) return;
+		const before = await git("rev-parse", "HEAD");
+		await git("pull", "--ff-only", "--no-rebase", "--no-tags", RELEASE_REPO, `refs/tags/${tag}`);
+		return (await git("rev-parse", "HEAD")) !== before ? version : undefined;
+	}
+
+	const digest = release.assets?.find(asset => asset.name === UPDATE_ASSET)?.digest;
+	if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest)) return;
+	const download = await fetch(`${RELEASE_REPO}/releases/download/${tag}/${UPDATE_ASSET}`, {
+		signal: AbortSignal.timeout(10_000),
+	});
+	if (!download.ok) return;
+	const content = Buffer.from(await download.arrayBuffer());
+	if (`sha256:${createHash("sha256").update(content).digest("hex")}` !== digest) return;
+	if (!content.includes(`const PLUGIN_VERSION = "${version}";`)) return;
+	if (!original?.equals(readFileSync(source))) return;
+	const tmp = `${source}.${randomUUID()}.tmp`;
+	try {
+		writeFileSync(tmp, content, { flag: "wx" });
+		renameSync(tmp, source);
+	} finally {
+		rmSync(tmp, { force: true });
+	}
+
+	return version;
+}
 
 interface StoredProvider {
 	id: string;
@@ -554,6 +634,15 @@ async function promptSecret(
 export default function quickProvider(pi: ExtensionAPI): void {
 	pi.setLabel("Quick Provider");
 	for (const entry of loadStorePreserving()) registerEntry(pi, entry);
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode !== "tui" || !ctx.hasUI || updateStarted || process.env.OMP_QUICK_PROVIDER_AUTO_UPDATE === "0") return;
+		updateStarted = true;
+		void autoUpdate().then(version => {
+			if (version) ctx.ui.notify(`Quick Provider 已更新到 ${version}，重启 omp 后生效`, "info");
+		}).catch(() => {
+			// An unavailable release or unwritable installation must not prevent provider use.
+		});
+	});
 
 	/** 加载期读存储：出错不抛（避免整个扩展加载失败），损坏文件仍会被备份保留。 */
 	function loadStorePreserving(): StoredProvider[] {

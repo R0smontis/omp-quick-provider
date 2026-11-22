@@ -44,6 +44,16 @@ omp plugin link ./omp-quick-provider
 
 **方式 3：marketplace 目录**（见 `omp` 文档 `docs/marketplace.md`），把本仓库作为 catalog 源加入后 `omp plugin install`。
 
+## 插件自动更新
+
+从 `1.0.2` 起，交互式 `omp` 启动后会在后台检查一次本仓库的最新 GitHub 正式发行版；成功更新后提示重启，不会在当前会话热重载。更新不修改 `quick-providers.json`，网络或更新失败不影响正常使用。
+
+- **单文件安装**：下载发行版附件 `quick-provider.ts`，核对 GitHub 提供的 SHA-256，再原子替换。
+- **Git 链接安装**：仅当检出干净的 `main` 时快进到发布标签；有本地改动、位于其他分支或历史分叉时不会强制更新。
+- **包管理器安装**：使用安装渠道自身的升级命令，插件不改包管理器维护的文件。
+
+从旧版迁移时先手动安装一次 `1.0.2`。设置环境变量 `OMP_QUICK_PROVIDER_AUTO_UPDATE=0` 可关闭自动检查。
+
 ## 使用
 
 1. `/qkprovider add`
@@ -75,6 +85,8 @@ node --test test/    # 需要 Node ≥ 22.6（原生 TS 类型擦除），实测
 ```
 
 测试用本地 mock 端点覆盖：发现成功 / 失败保留 / 空目录 / 分页（anthropic、gemini）/ 封套变体 / URL 校验 / 损坏备份 / 并发合并 / 覆盖注销 / 冲突确认 / 遮蔽渲染等 14 个场景。
+
+发布新版本时同步更新 `package.json` 的两个版本字段和 `quick-provider.ts` 的 `PLUGIN_VERSION`，推送 `vX.Y.Z` 标签，并把标签对应的 `extensions/quick-provider.ts` 作为同名附件上传到 GitHub 正式发行版。尚未上传附件时不要公开发行版。
 
 ## 已知限制
 
